@@ -1,0 +1,17 @@
+# Ambiente virtual do Poetry
+.venv/
+
+# Arquivos do VSCODE
+.vscode/
+
+# Arquivos de Build do PyInstaller (para o futuro)
+build/
+dist/
+*.spec
+
+# Arquivos sensíveis do usuário
+cnpjs_config.json
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
