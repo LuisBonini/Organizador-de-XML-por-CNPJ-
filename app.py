@@ -1,4 +1,4 @@
-# app.py (Versão 3.4 - Sem XlsxWriter, usando Openpyxl)
+# app.py (Versão Streamlit V4 - Sem Formatação de Excel)
 
 import streamlit as st
 import pandas as pd
@@ -8,45 +8,48 @@ from datetime import datetime
 import json
 import io
 import zipfile
-import sys # Adicionado para a função get_config_path
+# A importação de 'openpyxl.styles' foi REMOVIDA
 
-# --- Funções de Configuração ---
-
-def get_config_path(filename):
-    """ Obtém o caminho correto para o config, seja .py ou .exe """
-    if hasattr(sys, "_MEIPASS"):
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(sys.executable), ".."))
-        return os.path.join(base_dir, filename)
-    else:
-        return os.path.abspath(filename)
-
-CONFIG_FILE = get_config_path("cnpjs_config.json")
+# --- Configuração de CNPJs ---
+CONFIG_FILE = 'cnpjs_config.json'
 
 def carregar_cnpjs():
+    """Lê a lista de CNPJs do arquivo de configuração."""
     if not os.path.exists(CONFIG_FILE):
         return []
     try:
-        with open(CONFIG_FILE, 'r') as f:
-            data = json.load(f)
-            return data.get("cnpjs", [])
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
     except json.JSONDecodeError:
         return []
 
-def salvar_cnpjs(cnpjs_list):
-    with open(CONFIG_FILE, 'w') as f:
-        json.dump({"cnpjs": cnpjs_list}, f, indent=2)
+def salvar_cnpjs(lista_cnpjs):
+    """Salva a lista de CNPJs no arquivo de configuração."""
+    cnpjs_limpos = []
+    for cnpj in lista_cnpjs:
+        cnpj_numeros = "".join(filter(str.isdigit, cnpj))
+        if len(cnpj_numeros) == 14:
+            cnpjs_limpos.append(cnpj_numeros)
+        
+    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        json.dump(cnpjs_limpos, f, indent=4)
 
-# --- Funções de Lógica Fiscal ---
+# --- Lógica de Processamento de XML ---
 
-def processar_xml_from_memory(uploaded_file, nome_arquivo):
+def processar_xml(file_object, nome_arquivo):
+    """
+    Processa um único arquivo XML (lido do upload do Streamlit).
+    Removemos a lógica de ICMS/IPI Creditável.
+    """
     try:
         ns = {'nfe': 'http://www.portalfiscal.inf.br/nfe'}
-        tree = ET.parse(uploaded_file)
+        
+        tree = ET.parse(file_object)
         root = tree.getroot()
 
         infNFe = root.find('.//nfe:infNFe', ns)
         if infNFe is None:
-            return []
+            return [] 
 
         dados_capa = {
             'Arquivo': nome_arquivo,
@@ -62,17 +65,19 @@ def processar_xml_from_memory(uploaded_file, nome_arquivo):
                 dados_capa['CNPJ Destinatario'] = infNFe.find('.//nfe:dest/nfe:CPF', ns).text
             except AttributeError:
                 dados_capa['CNPJ Destinatario'] = ""
+        
         dados_capa['Nome Destinatario'] = infNFe.find('.//nfe:dest/nfe:xNome', ns).text
         dados_capa['Valor Total da Nota'] = float(infNFe.find('.//nfe:total/nfe:ICMSTot/nfe:vNF', ns).text)
-
+        
         lista_de_itens = []
 
         for item in root.findall('.//nfe:det', ns):
+            
             vICMS = item.find('.//nfe:imposto/nfe:ICMS//nfe:vICMS', ns)
             vIPI = item.find('.//nfe:imposto/nfe:IPI//nfe:vIPI', ns)
             vPIS = item.find('.//nfe:imposto/nfe:PIS//nfe:vPIS', ns)
             vCOFINS = item.find('.//nfe:imposto/nfe:COFINS//nfe:vCOFINS', ns)
-
+            
             dados_item = {
                 'SKU': item.find('.//nfe:prod/nfe:cProd', ns).text,
                 'Produto': item.find('.//nfe:prod/nfe:xProd', ns).text,
@@ -81,230 +86,256 @@ def processar_xml_from_memory(uploaded_file, nome_arquivo):
                 'Quantidade': float(item.find('.//nfe:prod/nfe:qCom', ns).text),
                 'Valor Unitario': float(item.find('.//nfe:prod/nfe:vUnCom', ns).text),
                 'Valor Produto': float(item.find('.//nfe:prod/nfe:vProd', ns).text),
+                
                 'Base ICMS': float(item.find('.//nfe:imposto/nfe:ICMS//nfe:vBC', ns).text) if item.find('.//nfe:imposto/nfe:ICMS//nfe:vBC', ns) is not None else 0,
                 'Aliq ICMS': float(item.find('.//nfe:imposto/nfe:ICMS//nfe:pICMS', ns).text) if item.find('.//nfe:imposto/nfe:ICMS//nfe:pICMS', ns) is not None else 0,
-                'Valor ICMS': float(vICMS.text) if vICMS is not None else 0,
                 'Base IPI': float(item.find('.//nfe:imposto/nfe:IPI//nfe:vBC', ns).text) if item.find('.//nfe:imposto/nfe:IPI//nfe:vBC', ns) is not None else 0,
                 'Aliq IPI': float(item.find('.//nfe:imposto/nfe:IPI//nfe:pIPI', ns).text) if item.find('.//nfe:imposto/nfe:IPI//nfe:pIPI', ns) is not None else 0,
-                'Valor IPI': float(vIPI.text) if vIPI is not None else 0,
                 'Base PIS': float(item.find('.//nfe:imposto/nfe:PIS//nfe:vBC', ns).text) if item.find('.//nfe:imposto/nfe:PIS//nfe:vBC', ns) is not None else 0,
                 'Aliq PIS': float(item.find('.//nfe:imposto/nfe:PIS//nfe:pPIS', ns).text) if item.find('.//nfe:imposto/nfe:PIS//nfe:pPIS', ns) is not None else 0,
-                'Valor PIS': float(vPIS.text) if vPIS is not None else 0,
                 'Base COFINS': float(item.find('.//nfe:imposto/nfe:COFINS//nfe:vBC', ns).text) if item.find('.//nfe:imposto/nfe:COFINS//nfe:vBC', ns) is not None else 0,
                 'Aliq COFINS': float(item.find('.//nfe:imposto/nfe:COFINS//nfe:pCOFINS', ns).text) if item.find('.//nfe:imposto/nfe:COFINS//nfe:pCOFINS', ns) is not None else 0,
-                'Valor COFINS': float(vCOFINS.text) if vCOFINS is not None else 0,
-            }
 
+                'Valor ICMS Total': float(vICMS.text) if vICMS is not None else 0,
+                'Valor IPI Total': float(vIPI.text) if vIPI is not None else 0,
+                'Valor PIS Total': float(vPIS.text) if vPIS is not None else 0,
+                'Valor COFINS Total': float(vCOFINS.text) if vCOFINS is not None else 0,
+            }
+            
             linha_completa = {**dados_capa, **dados_item}
             lista_de_itens.append(linha_completa)
-
+        
         return lista_de_itens
 
     except Exception as e:
-        st.error(f"Erro ao processar o arquivo '{nome_arquivo}': {e}")
+        st.error(f"Erro ao processar o arquivo {nome_arquivo}: {e}")
         return []
 
-# --- Função auto_ajustar_colunas REMOVIDA ---
+# --- Geração de Relatórios (Sem Formatação) ---
 
-def criar_excel_in_memory(dfs_para_salvar):
-    """Cria o arquivo Excel em memória (sem formatação XlsxWriter)."""
-    output = io.BytesIO()
-    # Usa o motor padrão (openpyxl) ou especifica-o
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for nome_aba, df in dfs_para_salvar.items():
-            tem_indice = nome_aba in ['1. Vendas por Cliente', '2. Compras por Fornecedor']
-            # A formatação agora será padrão do Excel
-            df.to_excel(writer, sheet_name=nome_aba, index=tem_indice)
-            # A chamada para auto_ajustar_colunas foi removida
-    return output.getvalue()
+def gerar_excel_para_cnpj(todos_os_itens, cnpj_empresa):
+    """
+    Gera um arquivo Excel em memória (BytesIO) para um CNPJ específico.
+    Estrutura de abas corrigida e SEM formatação de fonte ou coluna.
+    """
+    
+    output_excel = io.BytesIO()
+    
+    df_geral_itens = pd.DataFrame(todos_os_itens)
+    df_geral_itens['Data Emissao'] = pd.to_datetime(df_geral_itens['Data Emissao'])
+    df_geral_itens = df_geral_itens.sort_values(by=['Data Emissao', 'Numero NF']) 
 
-def criar_zip_in_memory(lista_relatorios):
+    # --- DataFrames de ITENS (para Abas 5 e 6) ---
+    df_saidas_detalhe = df_geral_itens[df_geral_itens['Tipo'] == 'Saída (Venda)'].copy()
+    df_entradas_detalhe = df_geral_itens[df_geral_itens['Tipo'] == 'Entrada (Compra)'].copy()
+
+    # --- DataFrames de RESUMO (para Abas 1 e 2) ---
+    df_resumo_clientes = df_saidas_detalhe.groupby('Nome Destinatario').agg(
+        Qtd_Linhas_Itens=('Produto', 'count'),
+        Valor_Total_Vendido=('Valor Produto', 'sum')
+    ).sort_values(by='Valor_Total_Vendido', ascending=False)
+    
+    df_resumo_fornecedores = df_entradas_detalhe.groupby('Nome Emitente').agg(
+        Qtd_Linhas_Itens=('Produto', 'count'),
+        Valor_Total_Comprado=('Valor Produto', 'sum'),
+    ).sort_values(by='Valor_Total_Comprado', ascending=False)
+    
+    # --- DataFrames de NOTAS (para Abas 3 e 4) ---
+    chave_nota = ['Numero NF', 'CNPJ Emitente', 'Data Emissao']
+    
+    agregacoes = {
+        'Tipo': 'first',
+        'Nome Emitente': 'first',
+        'Nome Destinatario': 'first',
+        'CNPJ Destinatario': 'first',
+        'Valor Total da Nota': 'first', 
+        
+        'Valor Produto': 'sum',
+        'Valor ICMS Total': 'sum',
+        'Valor IPI Total': 'sum',
+        'Valor PIS Total': 'sum',
+        'Valor COFINS Total': 'sum'
+    }
+
+    df_geral_notas = df_geral_itens.groupby(chave_nota).agg(agregacoes).reset_index()
+    df_geral_notas = df_geral_notas.sort_values(by='Data Emissao')
+    
+    df_saidas_notas = df_geral_notas[df_geral_notas['Tipo'] == 'Saída (Venda)'].copy()
+    df_entradas_notas = df_geral_notas[df_geral_notas['Tipo'] == 'Entrada (Compra)'].copy()
+    
+    
+    # --- Geração do Excel (Ordem das Abas Corrigida) ---
+    with pd.ExcelWriter(output_excel, engine='openpyxl') as writer:
+        
+        # Escreve os dados em cada aba
+        df_resumo_clientes.to_excel(writer, sheet_name='1. Vendas por Cliente') 
+        df_resumo_fornecedores.to_excel(writer, sheet_name='2. Compras por Fornecedor') 
+
+        colunas_notas = [col for col in df_saidas_notas.columns if 'Creditavel' not in col]
+        df_saidas_notas.to_excel(writer, sheet_name='3. Total Saídas (Notas)', index=False, columns=colunas_notas)
+        
+        colunas_notas_ent = [col for col in df_entradas_notas.columns if 'Creditavel' not in col]
+        df_entradas_notas.to_excel(writer, sheet_name='4. Total Entradas (Notas)', index=False, columns=colunas_notas_ent)
+
+        colunas_itens = [col for col in df_saidas_detalhe.columns if 'Creditavel' not in col]
+        df_saidas_detalhe.to_excel(writer, sheet_name='5. Detalhe Saídas (Itens)', index=False, columns=colunas_itens)
+        
+        colunas_itens_ent = [col for col in df_entradas_detalhe.columns if 'Creditavel' not in col]
+        df_entradas_detalhe.to_excel(writer, sheet_name='6. Detalhe Entradas (Itens)', index=False, columns=colunas_itens_ent)
+    
+        # *** NENHUMA FORMATAÇÃO É APLICADA ***
+
+    output_excel.seek(0)
+    return output_excel
+
+def criar_zip_dos_relatorios(relatorios_excel):
+    """Cria um arquivo ZIP em memória a partir de múltiplos relatórios Excel."""
     zip_buffer = io.BytesIO()
+    
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for nome_arquivo, data in lista_relatorios:
-            zip_file.writestr(nome_arquivo, data)
-    return zip_buffer.getvalue()
+        for nome_arquivo, data_bytes in relatorios_excel.items():
+            zip_file.writestr(nome_arquivo, data_bytes.getvalue())
+            
+    zip_buffer.seek(0)
+    return zip_buffer
 
-# --- A APLICAÇÃO STREAMLIT (Interface) ---
+# --- Interface Principal do Streamlit ---
 
-st.set_page_config(page_title="Organizador Fiscal", layout="wide", initial_sidebar_state="collapsed")
-st.title("🚀 Organizador Fiscal de XMLs")
+def main():
+    
+    st.set_page_config(layout="wide", page_title="Organizador Fiscal de XMLs")
+    st.title("🚀 Organizador Fiscal de XMLs")
+    st.markdown("Uma aplicação para processar lotes de XMLs, organizar por CNPJ e gerar relatórios em Excel.")
 
-if 'cnpjs' not in st.session_state:
-    st.session_state.cnpjs = carregar_cnpjs()
+    # Define as abas da aplicação
+    tab_processar, tab_config = st.tabs(["📄 Processar XMLs", "⚙️ Configurações"])
 
-tab_processar, tab_config = st.tabs(["Processar XMLs", "⚙️ Configurar CNPJs"])
-
-with tab_processar:
-    st.header("1. Faça o Upload dos XMLs")
-
-    if not st.session_state.cnpjs:
-        st.error("Nenhum CNPJ cadastrado. Vá para a aba '⚙️ Configurar CNPJs'.")
-    else:
-        st.info(f"CNPJs monitorados: {', '.join(st.session_state.cnpjs)}")
-
-        xml_files = st.file_uploader(
-            "Arraste e solte seus arquivos XML aqui",
-            type=["xml"],
-            accept_multiple_files=True
+    # --- Aba de Configurações ---
+    with tab_config:
+        st.subheader("Gerenciar CNPJs da Empresa")
+        st.markdown("Cadastre aqui todos os CNPJs (matriz e filiais) da sua empresa. Eles ficarão salvos no arquivo `cnpjs_config.json`.")
+        
+        cnpjs_atuais_lista = carregar_cnpjs()
+        cnpjs_texto = st.text_area(
+            "CNPJs (um por linha, apenas números)", 
+            value="\n".join(cnpjs_atuais_lista),
+            height=250
         )
 
-        st.header("2. Processe e Baixe os Relatórios")
+        if st.button("Salvar CNPJs"):
+            cnpjs_para_salvar = [cnpj.strip() for cnpj in cnpjs_texto.split('\n') if cnpj.strip()]
+            salvar_cnpjs(cnpjs_para_salvar)
+            st.success(f"{len(cnpjs_para_salvar)} CNPJs foram salvos com sucesso!")
+            st.rerun() # Recarrega a página para atualizar a lista na outra aba
 
-        if st.button("Processar XMLs", type="primary", disabled=(not xml_files)):
-            with st.spinner("Processando..."):
-                meus_cnpjs_set = set(st.session_state.cnpjs)
-                dados_por_cnpj = {}
-                total_xmls = 0
-                total_xmls_processados = 0
-                total_itens_processados = 0
+    # --- Aba de Processamento ---
+    with tab_processar:
+        
+        # Carrega os CNPJs cadastrados
+        meus_cnpjs_lista = carregar_cnpjs()
+        if not meus_cnpjs_lista:
+            st.warning("Atenção: Nenhum CNPJ cadastrado. Por favor, vá até a aba '⚙️ Configurações' para adicionar os CNPJs da sua empresa.")
+            st.stop()
+            
+        st.info(f"CNPJs cadastrados para processamento: {', '.join(meus_cnpjs_lista)}")
 
-                for uploaded_file in xml_files:
-                    total_xmls += 1
-                    uploaded_file.seek(0)
-                    lista_de_itens_da_nota = processar_xml_from_memory(uploaded_file, uploaded_file.name)
+        st.subheader("1. Carregar Arquivos XML")
+        uploaded_files = st.file_uploader(
+            "Selecione ou arraste para cá os arquivos XML da sua pasta",
+            accept_multiple_files=True,
+            type="xml"
+        )
 
-                    if not lista_de_itens_da_nota:
-                        continue
+        st.subheader("2. Processar Dados")
+        if st.button("Iniciar Processamento", type="primary", disabled=(not uploaded_files)):
+            
+            meus_cnpjs_set = set(meus_cnpjs_lista)
+            dados_por_cnpj = {}
+            
+            progress_bar = st.progress(0, text="Iniciando...")
+            total_xmls = len(uploaded_files)
+            
+            for i, file in enumerate(uploaded_files):
+                progress_bar.progress((i + 1) / total_xmls, text=f"Processando: {file.name}")
+                
+                # Passa o objeto de arquivo e o nome
+                lista_de_itens_da_nota = processar_xml(file, file.name) 
 
-                    item_exemplo = lista_de_itens_da_nota[0]
-                    cnpj_emit = item_exemplo['CNPJ Emitente']
-                    cnpj_dest = item_exemplo['CNPJ Destinatario']
-                    tipo_operacao = None
-                    cnpj_proprietario = None
+                if not lista_de_itens_da_nota:
+                    continue
+                
+                item_exemplo = lista_de_itens_da_nota[0]
+                cnpj_emit = item_exemplo['CNPJ Emitente']
+                cnpj_dest = item_exemplo['CNPJ Destinatario']
 
-                    if cnpj_emit in meus_cnpjs_set:
-                        tipo_operacao = 'Saída (Venda)'
-                        cnpj_proprietario = cnpj_emit
-                    elif cnpj_dest in meus_cnpjs_set:
-                        tipo_operacao = 'Entrada (Compra)'
-                        cnpj_proprietario = cnpj_dest
-                    else:
-                        continue
+                tipo_operacao = None
+                cnpj_proprietario = None
 
-                    total_xmls_processados += 1
-                    total_itens_processados += len(lista_de_itens_da_nota)
-
-                    if cnpj_proprietario not in dados_por_cnpj:
-                        dados_por_cnpj[cnpj_proprietario] = []
-
-                    for item in lista_de_itens_da_nota:
-                        item['Tipo'] = tipo_operacao
-                        dados_por_cnpj[cnpj_proprietario].append(item)
-
-                st.success(f"Processamento Concluído! {total_xmls_processados} de {total_xmls} XMLs relevantes continham {total_itens_processados} itens.")
-
-                if not dados_por_cnpj:
-                    st.warning("Nenhuma nota fiscal válida para os CNPJs informados foi encontrada.")
-                    st.session_state.relatorios = []
+                if cnpj_emit in meus_cnpjs_set:
+                    tipo_operacao = 'Saída (Venda)'
+                    cnpj_proprietario = cnpj_emit
+                elif cnpj_dest in meus_cnpjs_set:
+                    tipo_operacao = 'Entrada (Compra)'
+                    cnpj_proprietario = cnpj_dest
                 else:
-                    relatorios_gerados = []
-                    for cnpj_empresa, todos_os_itens in dados_por_cnpj.items():
-                        df_geral_itens = pd.DataFrame(todos_os_itens)
-                        df_geral_itens['Data Emissao'] = pd.to_datetime(df_geral_itens['Data Emissao'])
-                        df_geral_itens = df_geral_itens.sort_values(by=['Data Emissao', 'Numero NF'])
+                    continue 
 
-                        df_saidas_detalhe = df_geral_itens[df_geral_itens['Tipo'] == 'Saída (Venda)'].copy()
-                        df_entradas_detalhe = df_geral_itens[df_geral_itens['Tipo'] == 'Entrada (Compra)'].copy()
+                if cnpj_proprietario not in dados_por_cnpj:
+                    dados_por_cnpj[cnpj_proprietario] = []
+                
+                for item in lista_de_itens_da_nota:
+                    item['Tipo'] = tipo_operacao
+                    dados_por_cnpj[cnpj_proprietario].append(item)
 
-                        df_resumo_clientes = df_saidas_detalhe.groupby('Nome Destinatario').agg(
-                            Qtd_Linhas_Itens=('Produto', 'count'),
-                            Valor_Total_Vendido=('Valor Produto', 'sum')
-                        ).sort_values(by='Valor_Total_Vendido', ascending=False)
+            progress_bar.empty()
+            
+            if not dados_por_cnpj:
+                st.warning("Processamento concluído, mas nenhuma nota fiscal (Entrada ou Saída) corresponde aos CNPJs cadastrados.")
+                st.stop()
 
-                        df_resumo_fornecedores = df_entradas_detalhe.groupby('Nome Emitente').agg(
-                            Qtd_Linhas_Itens=('Produto', 'count'),
-                            Valor_Total_Comprado=('Valor Produto', 'sum'),
-                        ).sort_values(by='Valor_Total_Comprado', ascending=False)
+            st.success(f"Processamento Concluído! Dados encontrados para {len(dados_por_cnpj)} CNPJ(s).")
+            
+            # --- Geração e Download dos Relatórios ---
+            st.subheader("3. Baixar Relatórios")
+            
+            relatorios_em_memoria = {}
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            with st.spinner("Gerando relatórios Excel..."):
+                for cnpj_empresa, lista_itens_cnpj in dados_por_cnpj.items():
+                    
+                    df_cnpj_itens = pd.DataFrame(lista_itens_cnpj)
+                    bytes_excel = gerar_excel_para_cnpj(df_cnpj_itens, cnpj_empresa)
+                    
+                    nome_arquivo_excel = f'Relatorio_Fiscal_CNPJ_{cnpj_empresa}_{timestamp}.xlsx'
+                    relatorios_em_memoria[nome_arquivo_excel] = bytes_excel
 
-                        chave_nota = ['Numero NF', 'CNPJ Emitente', 'Data Emissao']
-                        agregacoes = {
-                            'Tipo': 'first', 'Nome Emitente': 'first', 'Nome Destinatario': 'first',
-                            'CNPJ Destinatario': 'first', 'Valor Total da Nota': 'first',
-                            'Valor Produto': 'sum', 'Valor ICMS': 'sum', 'Valor IPI': 'sum',
-                            'Valor PIS': 'sum', 'Valor COFINS': 'sum'
-                        }
+            if len(relatorios_em_memoria) == 1:
+                # Se for só um, baixa direto
+                nome_arquivo = list(relatorios_em_memoria.keys())[0]
+                dados_arquivo = list(relatorios_em_memoria.values())[0]
+                
+                st.download_button(
+                    label=f"📥 Baixar Relatório para CNPJ {list(dados_por_cnpj.keys())[0]}",
+                    data=dados_arquivo,
+                    file_name=nome_arquivo,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+            
+            elif len(relatorios_em_memoria) > 1:
+                # Se for mais de um, cria o ZIP
+                st.markdown(f"Relatórios gerados para {len(relatorios_em_memoria)} CNPJs. Baixe todos em um arquivo .zip.")
+                
+                zip_bytes = criar_zip_dos_relatorios(relatorios_em_memoria)
+                nome_zip = f"Relatorios_Fiscais_{timestamp}.zip"
+                
+                st.download_button(
+                    label=f"📥 Baixar todos os {len(relatorios_em_memoria)} relatórios (.zip)",
+                    data=zip_bytes,
+                    file_name=nome_zip,
+                    mime="application/zip"
+                )
 
-                        df_geral_notas = df_geral_itens.groupby(chave_nota).agg(agregacoes).reset_index()
-                        df_geral_notas = df_geral_notas.sort_values(by='Data Emissao')
-
-                        df_saidas_notas = df_geral_notas[df_geral_notas['Tipo'] == 'Saída (Venda)'].copy()
-                        df_entradas_notas = df_geral_notas[df_geral_notas['Tipo'] == 'Entrada (Compra)'].copy()
-
-                        dfs_para_salvar = {
-                            '1. Vendas por Cliente': df_resumo_clientes,
-                            '2. Compras por Fornecedor': df_resumo_fornecedores,
-                            '3. Total Saídas (Notas)': df_saidas_notas,
-                            '4. Total Entradas (Notas)': df_entradas_notas,
-                            '5. Detalhe Saídas (Itens)': df_saidas_detalhe,
-                            '6. Detalhe Entradas (Itens)': df_entradas_detalhe,
-                        }
-
-                        excel_data = criar_excel_in_memory(dfs_para_salvar)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        nome_arquivo_excel = f'Relatorio_Fiscal_CNPJ_{cnpj_empresa}_{timestamp}.xlsx'
-
-                        relatorios_gerados.append((nome_arquivo_excel, excel_data))
-
-                    st.session_state.relatorios = relatorios_gerados
-
-        if 'relatorios' in st.session_state and st.session_state.relatorios:
-            st.subheader("📥 Downloads Disponíveis")
-
-            with st.container(border=True):
-                num_relatorios = len(st.session_state.relatorios)
-
-                if num_relatorios == 1:
-                    nome_arquivo, data = st.session_state.relatorios[0]
-                    st.download_button(
-                        label=f"Baixar Relatório (CNPJ {nome_arquivo.split('_')[2]})",
-                        data=data,
-                        file_name=nome_arquivo,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                else:
-                    st.markdown(f"**{num_relatorios} relatórios** foram gerados (um por CNPJ).")
-                    zip_data = criar_zip_in_memory(st.session_state.relatorios)
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    st.download_button(
-                        label=f"Baixar Todos ({num_relatorios}) os Relatórios (.zip)",
-                        data=zip_data,
-                        file_name=f"Relatorios_Fiscais_{timestamp}.zip",
-                        mime="application/zip",
-                        type="primary"
-                    )
-                    with st.expander("Ver arquivos incluídos no .zip"):
-                        for nome, _ in st.session_state.relatorios:
-                            st.caption(f"✓ {nome}")
-
-with tab_config:
-    st.header("Gerenciar CNPJs da Sua Empresa")
-    st.info("Cadastre aqui todos os CNPJs que você considera como 'seus'.")
-
-    with st.expander("Adicionar Novo CNPJ", expanded=True):
-        novo_cnpj_input = st.text_input("Digite o CNPJ:", placeholder="Ex: 12345678000199", key="cnpj_input")
-        if st.button("Adicionar CNPJ", key="add_cnpj_btn"):
-            cnpj_limpo = novo_cnpj_input.strip().replace('.','').replace('/','').replace('-','')
-            if cnpj_limpo and cnpj_limpo.isdigit() and len(cnpj_limpo) == 14:
-                if cnpj_limpo not in st.session_state.cnpjs:
-                    st.session_state.cnpjs.append(cnpj_limpo)
-                    salvar_cnpjs(st.session_state.cnpjs)
-                    st.success(f"CNPJ {cnpj_limpo} adicionado!")
-                    st.rerun()
-                else:
-                    st.warning("CNPJ já cadastrado.")
-            else:
-                st.error("CNPJ inválido.")
-
-    with st.expander("Remover CNPJs Cadastrados", expanded=True):
-        if not st.session_state.cnpjs:
-            st.warning("Nenhum CNPJ cadastrado.")
-        else:
-            with st.form("form_remocao"):
-                cnpj_para_remover = st.selectbox("Selecione para remover:", st.session_state.cnpjs)
-                submitted = st.form_submit_button("Remover CNPJ Selecionado")
-                if submitted:
-                    st.session_state.cnpjs.remove(cnpj_para_remover)
-                    salvar_cnpjs(st.session_state.cnpjs)
-                    st.success(f"CNPJ {cnpj_para_remover} removido.")
-                    st.rerun()
+# Ponto de entrada da aplicação
+if __name__ == "__main__":
+    main()
