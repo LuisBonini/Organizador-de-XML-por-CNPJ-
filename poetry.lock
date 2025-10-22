@@ -1448,19 +1448,7 @@ files = [
 [package.extras]
 watchmedo = ["PyYAML (>=3.10)"]
 
-[[package]]
-name = "xlsxwriter"
-version = "3.2.9"
-description = "A Python module for creating Excel XLSX files."
-optional = false
-python-versions = ">=3.8"
-groups = ["main"]
-files = [
-    {file = "xlsxwriter-3.2.9-py3-none-any.whl", hash = "sha256:9a5db42bc5dff014806c58a20b9eae7322a134abb6fce3c92c181bfb275ec5b3"},
-    {file = "xlsxwriter-3.2.9.tar.gz", hash = "sha256:254b1c37a368c444eac6e2f867405cc9e461b0ed97a3233b2ac1e574efb4140c"},
-]
-
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.13,<3.15"
-content-hash = "6df922e5a188c913331ee19b600e7d2d68683107b2e031091670b85e068e08be"
+content-hash = "77c4de01ba9d00b0dcf30f6c2a69cea49242ed8f690c3f31bea49b4f598ff0d7"
